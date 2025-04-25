@@ -24,6 +24,14 @@
 #define KPM_AUTHOR(x) KPM_INFO(author, x, KPM_AUTHOR_LEN)
 #define KPM_DESCRIPTION(x) KPM_INFO(description, x, KPM_DESCRIPTION_LEN)
 
+#ifndef min_t
+#define min_t(type, x, y) ({          \
+    type __min1 = (x);                \
+    type __min2 = (y);                \
+    __min1 < __min2 ? __min1 : __min2;\
+})
+#endif
+
 typedef long (*mod_initcall_t)(const char *args, const char *event, void *reserved);
 typedef long (*mod_ctl0call_t)(const char *ctl_args, char *__user out_msg, int outlen);
 typedef long (*mod_ctl1call_t)(void *a1, void *a2, void *a3);

@@ -12,21 +12,11 @@
 #include <uapi/asm-generic/errno.h>
 #include <uapi/asm-generic/unistd.h>
 
+extern uintptr_t *sys_call_table;
+extern uintptr_t *compat_sys_call_table;
 extern int has_syscall_wrapper;
-extern struct
-{
-    const char *name;
-    uintptr_t addr;
-} syscall_name_table[460];
-
-extern struct
-{
-    const char *name;
-    uintptr_t addr;
-} compat_syscall_name_table[460];
 
 const char __user *get_user_arg_ptr(void *a0, void *a1, int nr);
-
 int set_user_arg_ptr(void *a0, void *a1, int nr, uintptr_t val);
 
 long raw_syscall0(long nr);
@@ -38,10 +28,6 @@ long raw_syscall5(long nr, long arg0, long arg1, long arg2, long arg3, long arg4
 long raw_syscall6(long nr, long arg0, long arg1, long arg2, long arg3, long arg4, long arg5);
 
 #define raw_syscall(f) raw_syscall##f
-
-uintptr_t syscalln_name_addr(int nr, int is_compat);
-
-uintptr_t syscalln_addr(int nr, int is_compat);
 
 static inline uint64_t *syscall_args(void *hook_fargs)
 {
@@ -70,100 +56,67 @@ static inline void *syscall_argn_p(void *fdata_args, int n)
     return syscall_args(fdata_args) + n;
 }
 
-/**
- * @brief 
- * 
- * @param nr 
- * @param narg 
- * @param is_compat 
- * @param before 
- * @param after 
- * @param udata 
- * @return hook_err_t 
- */
-hook_err_t fp_wrap_syscalln(int nr, int narg, int is_compat, void *before, void *after, void *udata);
-
-/**
- * @brief 
- * 
- * @param nr 
- * @param is_compat 
- * @param before 
- * @param after 
- */
-void fp_unwrap_syscalln(int nr, int is_compat, void *before, void *after);
-
 static inline hook_err_t fp_hook_syscalln(int nr, int narg, void *before, void *after, void *udata)
 {
-    return fp_wrap_syscalln(nr, narg, 0, before, after, udata);
+    uintptr_t fp_addr = (uintptr_t)(sys_call_table + nr);
+    if (has_syscall_wrapper) narg = 1;
+    return fp_hook_wrap(fp_addr, narg, before, after, udata);
 }
 
-static inline void fp_unhook_syscalln(int nr, void *before, void *after)
+static inline void fp_unhook_syscall(int nr, void *before, void *after)
 {
-    return fp_unwrap_syscalln(nr, 0, before, after);
+    uintptr_t fp_addr = (uintptr_t)(sys_call_table + nr);
+    fp_hook_unwrap(fp_addr, before, after);
 }
 
 static inline hook_err_t fp_hook_compat_syscalln(int nr, int narg, void *before, void *after, void *udata)
 {
-    return fp_wrap_syscalln(nr, narg, 1, before, after, udata);
+    if (!compat_sys_call_table) return HOOK_BAD_ADDRESS;
+    uintptr_t fp_addr = (uintptr_t)(compat_sys_call_table + nr);
+    if (has_syscall_wrapper) narg = 1;
+    return fp_hook_wrap(fp_addr, narg, before, after, udata);
 }
 
-static inline void fp_unhook_compat_syscalln(int nr, void *before, void *after)
+static inline void fp_unhook_compat_syscall(int nr, void *before, void *after)
 {
-    return fp_unwrap_syscalln(nr, 1, before, after);
+    if (!compat_sys_call_table) return;
+    uintptr_t fp_addr = (uintptr_t)(compat_sys_call_table + nr);
+    fp_hook_unwrap(fp_addr, before, after);
 }
 
-/**
- * @brief 
- * 
- * @param nr 
- * @param narg 
- * @param is_compat 
- * @param before 
- * @param after 
- * @param udata 
- * @return hook_err_t 
- */
-hook_err_t inline_wrap_syscalln(int nr, int narg, int is_compat, void *before, void *after, void *udata);
-
-/**
- * @brief 
- * 
- * @param nr 
- * @param is_compat 
- * @param before 
- * @param after 
- */
-void inline_unwrap_syscalln(int nr, int is_compat, void *before, void *after);
-
+/*
+xxx.cfi_jt example:
+hint #0x22
+b #0xfffffffffeb452f4
+*/
 static inline hook_err_t inline_hook_syscalln(int nr, int narg, void *before, void *after, void *udata)
 {
-    return inline_wrap_syscalln(nr, narg, 0, before, after, udata);
+    uintptr_t fp = sys_call_table[nr];
+    if (has_syscall_wrapper) narg = 1;
+    return hook_wrap((void *)fp, narg, before, after, udata);
 }
 
-static inline void inline_unhook_syscalln(int nr, void *before, void *after)
+static inline void inline_unhook_syscall(int nr, void *before, void *after)
 {
-    inline_unwrap_syscalln(nr, 0, before, after);
+    uintptr_t fp = sys_call_table[nr];
+    hook_unwrap((void *)fp, before, after);
 }
 
 static inline hook_err_t inline_hook_compat_syscalln(int nr, int narg, void *before, void *after, void *udata)
 {
-    return inline_wrap_syscalln(nr, narg, 1, before, after, udata);
+    if (!compat_sys_call_table) return HOOK_BAD_ADDRESS;
+    uintptr_t fp = compat_sys_call_table[nr];
+    if (has_syscall_wrapper) narg = 1;
+    return hook_wrap((void *)fp, narg, before, after, udata);
 }
 
-static inline void inline_unhook_compat_syscalln(int nr, void *before, void *after)
+static inline void inline_unhook_compat_syscall(int nr, void *before, void *after)
 {
-    inline_unwrap_syscalln(nr, 0, before, after);
+    if (!compat_sys_call_table) return;
+    uintptr_t fp = compat_sys_call_table[nr];
+    hook_unwrap((void *)fp, before, after);
 }
 
-//
-
-hook_err_t hook_syscalln(int nr, int narg, void *before, void *after, void *udata);
-
-void unhook_syscalln(int nr, void *before, void *after);
-
-hook_err_t hook_compat_syscalln(int nr, int narg, void *before, void *after, void *udata);
-
-void unhook_compat_syscalln(int nr, void *before, void *after);
+int syscall_init();
 
 #endif

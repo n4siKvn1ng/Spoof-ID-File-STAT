@@ -1,5 +1,8 @@
 .vscode/*
 .history/
+.git
+kpms/spoof-id-file-stat/*.kpm
+kpms/spoof-id-file-stat/spoofSTAT.o
 
 **/.DS_Store
 

@@ -62,4 +62,6 @@ int get_module_nums();
 int list_modules(char *out_names, int size);
 int get_module_info(const char *name, char *out_info, int size);
 
+int module_init();
+
 #endif

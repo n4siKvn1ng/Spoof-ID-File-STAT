@@ -132,11 +132,6 @@ KP_EXPORT_SYMBOL(kfunc(strreplace));
 void kfunc_def(fortify_panic)(const char *name) = 0;
 KP_EXPORT_SYMBOL(kfunc(fortify_panic));
 
-int __must_check kfunc_def(kstrtoull)(const char *s, unsigned int base, unsigned long long *res) = 0;
-KP_EXPORT_SYMBOL(kfunc(kstrtoull));
-int __must_check kfunc_def(kstrtoll)(const char *s, unsigned int base, long long *res) = 0;
-KP_EXPORT_SYMBOL(kfunc(kstrtoll));
-
 static void _linux_lib_string_sym_match(const char *name, unsigned long addr)
 {
     kfunc_match(strncasecmp, name, addr);
@@ -183,8 +178,6 @@ static void _linux_lib_string_sym_match(const char *name, unsigned long addr)
     kfunc_match(memchr_inv, name, addr);
     kfunc_match(strreplace, name, addr);
     // kfunc_match(fortify_panic, name, addr);
-    kfunc_match(kstrtoull, name, addr);
-    kfunc_match(kstrtoll, name, addr);
 }
 
 // lib/argv_split.c
@@ -253,7 +246,7 @@ static void _linux_include_kernel_sym_match(const char *name, unsigned long addr
     kfunc_match(vsscanf, name, addr);
 }
 
-static void _linux_libs_symbol_init(void *data, const char *name, struct module *m, unsigned long addr)
+static int _linux_libs_symbol_init(void *data, const char *name, struct module *m, unsigned long addr)
 {
     _linux_lib_misc(name, addr);
     _linux_lib_strncpy_from_user_sym_match(name, addr);
@@ -261,13 +254,15 @@ static void _linux_libs_symbol_init(void *data, const char *name, struct module 
     _linux_lib_argv_split_sym_match(name, addr);
     _linux_lib_seq_buf_sym_match(name, addr);
     _linux_include_kernel_sym_match(name, addr);
+    return 0;
 }
 
-void linux_libs_symbol_init(const char *name, unsigned long addr)
+int linux_libs_symbol_init(const char *name, unsigned long addr)
 {
 #ifdef INIT_USE_KALLSYMS_LOOKUP_NAME
     _linux_libs_symbol_init(0, 0, 0, 0);
 #else
     kallsyms_on_each_symbol(_linux_libs_symbol_init, 0);
 #endif
+    return 0;
 }

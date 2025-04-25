@@ -14,6 +14,8 @@ extern void _kp_symbol_start();
 extern void _kp_symbol_end();
 static uint64_t symbol_start = 0;
 static uint64_t symbol_end = 0;
+static unsigned long link_base_addr = (unsigned long)_link_base;
+static unsigned long runtime_base_addr = 0;
 
 // DJB2
 static unsigned long sym_hash(const char *str)
@@ -51,14 +53,17 @@ unsigned long symbol_lookup_name(const char *name)
     return 0;
 }
 
-void symbol_init()
+int symbol_init()
 {
+    runtime_base_addr = (unsigned long)_link_base;
     symbol_start = (uint64_t)_kp_symbol_start;
     symbol_end = (uint64_t)_kp_symbol_end;
     log_boot("Symbol: %llx, %llx\n", symbol_start, symbol_end);
+    log_boot("Symbol link: %llx, runtime: %llx\n", link_base_addr, runtime_base_addr);
     for (uint64_t addr = symbol_start; addr < symbol_end; addr += sizeof(kp_symbol_t)) {
         kp_symbol_t *symbol = (kp_symbol_t *)addr;
         symbol->addr = symbol->addr - link_base_addr + runtime_base_addr;
         symbol->hash = sym_hash(symbol->name);
     }
+    return 0;
 }
