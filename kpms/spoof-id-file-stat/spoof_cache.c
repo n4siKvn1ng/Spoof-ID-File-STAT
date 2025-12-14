@@ -8,6 +8,19 @@
 #include <linux/sched.h>
 // #include <linux/workqueue.h> // Missing, so we define manually below
 
+// Ubah menjadi 0 untuk Rilis (Log mati), 1 untuk Debug (Log nyala)
+#define DEBUG_MODE 0
+
+#if DEBUG_MODE
+    #define LOGD(fmt, ...) pr_info("[Obbed] " fmt, ##__VA_ARGS__)
+    #define LOGE(fmt, ...) pr_err("[Obbed] " fmt, ##__VA_ARGS__)
+    #define LOGW(fmt, ...) pr_warn("[Obbed] " fmt, ##__VA_ARGS__)
+#else
+    #define LOGD(fmt, ...) do {} while(0)
+    #define LOGE(fmt, ...) do {} while(0)
+    #define LOGW(fmt, ...) do {} while(0)
+#endif
+
 // =========================================================================
 // MANUAL DEFINITIONS FOR WORKQUEUE (Since header is missing)
 // =========================================================================
@@ -107,25 +120,25 @@ static spinlock_t cache_lock = __SPIN_LOCK_UNLOCKED();
 static int init_kernel_functions(void) {
     __kmalloc_fn = (void* (*)(size_t, gfp_t))kallsyms_lookup_name("__kmalloc");
     if (!__kmalloc_fn) {
-        pr_err("[Obbed] Failed to find __kmalloc\n");
+        LOGE("Failed to find __kmalloc\n");
         return -1;
     }
 
     kfree_fn = (void (*)(const void*))kallsyms_lookup_name("kfree");
     if (!kfree_fn) {
-        pr_err("[Obbed] Failed to find kfree\n");
+        LOGE("Failed to find kfree\n");
         return -1;
     }
 
     _raw_spin_lock_irqsave_fn = (unsigned long (*)(raw_spinlock_t*))kallsyms_lookup_name("_raw_spin_lock_irqsave");
     if (!_raw_spin_lock_irqsave_fn) {
-        pr_err("[Obbed] Failed to find _raw_spin_lock_irqsave\n");
+        LOGE("Failed to find _raw_spin_lock_irqsave\n");
         return -1;
     }
 
     _raw_spin_unlock_irqrestore_fn = (void (*)(raw_spinlock_t*, unsigned long))kallsyms_lookup_name("_raw_spin_unlock_irqrestore");
     if (!_raw_spin_unlock_irqrestore_fn) {
-        pr_err("[Obbed] Failed to find _raw_spin_unlock_irqrestore\n");
+        LOGE("Failed to find _raw_spin_unlock_irqrestore\n");
         return -1;
     }
 
@@ -136,7 +149,7 @@ static int init_kernel_functions(void) {
     kernel_write_fn = (ssize_t (*)(struct file *, const void *, size_t, loff_t *))kallsyms_lookup_name("kernel_write");
 
     if (!filp_open_fn || !filp_close_fn) {
-        pr_warn("[Obbed] File operations missing - persistence disabled\n");
+        LOGW("File operations missing - persistence disabled\n");
     }
 
     // Resolve credential functions
@@ -162,24 +175,24 @@ static int init_kernel_functions(void) {
     system_wq_ptr_ptr = (struct workqueue_struct **)kallsyms_lookup_name("system_percpu_wq");
     if (system_wq_ptr_ptr) {
         resolved_system_wq = *system_wq_ptr_ptr;
-        pr_info("[Obbed] Use system_percpu_wq\n");
+        LOGD("Use system_percpu_wq\n");
     } else {
         // Fallback to system_wq (older kernels)
         system_wq_ptr_ptr = (struct workqueue_struct **)kallsyms_lookup_name("system_wq");
         if (system_wq_ptr_ptr) {
             resolved_system_wq = *system_wq_ptr_ptr;
-            pr_info("[Obbed] Use system_wq\n");
+            LOGD("Use system_wq\n");
         }
     }
     
     if (!queue_work_on_fn || !flush_work_fn || !resolved_system_wq) {
-        pr_warn("[Obbed] Failed to fully resolve workqueue components: QWON=%p FW=%p WQ=%p\n", 
+        LOGW("Failed to fully resolve workqueue components: QWON=%p FW=%p WQ=%p\n", 
                 queue_work_on_fn, flush_work_fn, resolved_system_wq);
     } else {
-        pr_info("[Obbed] Workqueue components resolved successfully (using queue_work_on)\n");
+        LOGD("Workqueue components resolved successfully (using queue_work_on)\n");
     }
 
-    pr_info("[Obbed] Kernel functions resolved\n");
+    LOGD("Kernel functions resolved\n");
     return 0;
 }
 
@@ -193,15 +206,15 @@ static const struct cred* spoof_file_op_start(void) {
         struct task_struct *init_task = find_task_by_vpid_fn(1);
         if (init_task) {
             new_cred = get_task_cred_fn(init_task);
-            pr_info("[Obbed] [WORKER] Stole credentials from Init (PID 1)\n");
+            LOGD("[WORKER] Stole credentials from Init (PID 1)\n");
         } else {
-            pr_warn("[Obbed] [WORKER] Failed to find Init task (PID 1)\n");
+            LOGW("[WORKER] Failed to find Init task (PID 1)\n");
         }
     }
     
     if (!new_cred && init_cred_ptr) {
         new_cred = init_cred_ptr;
-        pr_info("[Obbed] [WORKER] Fallback: Using static init_cred\n");
+        LOGD("[WORKER] Fallback: Using static init_cred\n");
     }
     
     if (new_cred) {
@@ -248,11 +261,11 @@ static int do_spoof_ensure_dir(void) {
         filp_close_fn(dir, NULL);
         ret = 0;
     } else {
-         pr_err("[Obbed] [WORKER] Failed to open dir %s: err=%ld\n", SPOOF_DIR, PTR_ERR(dir));
+         LOGE("[WORKER] Failed to open dir %s: err=%ld\n", SPOOF_DIR, PTR_ERR(dir));
     }
     
     spoof_file_op_end(old_cred);
-    if (ret != 0) pr_warn("[Obbed] Spoof directory not found: %s\n", SPOOF_DIR);
+    if (ret != 0) LOGW("Spoof directory not found: %s\n", SPOOF_DIR);
     return ret;
 }
 
@@ -286,7 +299,7 @@ static int do_spoof_file_save(const char *process_name, struct spoof_data *data)
     
     f = filp_open_fn(filepath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (IS_ERR(f)) {
-        pr_err("[Obbed] [WORKER] Failed to open file %s for writing: err=%ld\n", filepath, PTR_ERR(f));
+        LOGE("[WORKER] Failed to open file %s for writing: err=%ld\n", filepath, PTR_ERR(f));
         spoof_file_op_end(old_cred);
         return -1;
     }
@@ -296,11 +309,11 @@ static int do_spoof_file_save(const char *process_name, struct spoof_data *data)
     spoof_file_op_end(old_cred);
     
     if (written != sizeof(file_data)) {
-        pr_err("[Obbed] [WORKER] Failed to write full data to %s: wrote %zd/%zu\n", filepath, written, sizeof(file_data));
+        LOGE("[WORKER] Failed to write full data to %s: wrote %zd/%zu\n", filepath, written, sizeof(file_data));
         return -1;
     }
     
-    pr_info("[Obbed] [WORKER] Successfully saved %s (process: %s)\n", filepath, process_name);
+    LOGD("[WORKER] Successfully saved %s (process: %s)\n", filepath, process_name);
     return 0;
 }
 
@@ -373,7 +386,7 @@ static int do_spoof_file_delete(const char *process_name) {
     if (!IS_ERR(f)) filp_close_fn(f, NULL);
     
     spoof_file_op_end(old_cred);
-    pr_info("[Obbed] [WORKER] Deleted file for process: %s\n", process_name);
+    LOGD("[WORKER] Deleted file for process: %s\n", process_name);
     return 0;
 }
 
@@ -439,7 +452,7 @@ static int dispatch_spoof_work(int op_type, const char *process_name, struct spo
     // FALLBACK: Only if we REALLY can't find queue_work or system_wq
     static int warned_once = 0;
     if (!warned_once) {
-        pr_warn("[Obbed] PRE-FLIGHT: Workqueue resolution FAILED! Downgrading to DIRECT execution.\n");
+        LOGW("PRE-FLIGHT: Workqueue resolution FAILED! Downgrading to DIRECT execution.\n");
         warned_once = 1;
     }
 
@@ -476,7 +489,7 @@ int spoof_file_delete(const char *process_name) {
 
 // Delete all spoof files (lock logic remains here, file deletion dispatched)
 int spoof_file_delete_all(void) {
-    pr_info("[Obbed] Deleting all spoof data...\n");
+    LOGD("Deleting all spoof data...\n");
     
     struct spoof_data *entry;
     unsigned long flags;
@@ -504,7 +517,7 @@ int spoof_file_delete_all(void) {
         spoof_file_delete(process_names_to_delete[i]);
     }
     
-    pr_info("[Obbed] Spoof file cleanup completed (%d files)\n", count);
+    LOGD("Spoof file cleanup completed (%d files)\n", count);
     return 0;
 }
 
@@ -512,7 +525,7 @@ void spoof_cache_init(void) {
     cache_head = NULL;
     spin_lock_init(&cache_lock);
     if (init_kernel_functions() != 0) {
-        pr_err("[Obbed] Cache initialization failed!\n");
+        LOGE("Cache initialization failed!\n");
     }
     spoof_ensure_dir();
 }
@@ -575,7 +588,7 @@ struct spoof_data* get_spoof_data(const char *process_name, uid_t uid) {
         if (process_name_matches(entry->process_name, process_name)) {
             // Update UID if it changed (reinstall case)
             if (entry->uid != uid) {
-                pr_info("[Obbed] UID changed for process %s: %d -> %d (likely reinstall)\n", 
+                LOGD("UID changed for process %s: %d -> %d (likely reinstall)\n", 
                         process_name, entry->uid, uid);
                 entry->uid = uid;
             }
@@ -592,7 +605,7 @@ struct spoof_data* get_spoof_data(const char *process_name, uid_t uid) {
     if (spoof_file_load(process_name, entry) == 0) {
         // Update UID if it changed (reinstall case)
         if (entry->uid != uid) {
-            pr_info("[Obbed] UID changed for process %s (from file): %d -> %d (likely reinstall)\n", 
+            LOGD("UID changed for process %s (from file): %d -> %d (likely reinstall)\n", 
                     process_name, entry->uid, uid);
             entry->uid = uid;
             // Re-save with new UID
@@ -602,7 +615,7 @@ struct spoof_data* get_spoof_data(const char *process_name, uid_t uid) {
         entry->next = cache_head;
         cache_head = entry;
         _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
-        pr_info("[Obbed] Loaded persistent spoof data for process %s (UID %d)\n", process_name, uid);
+        LOGD("Loaded persistent spoof data for process %s (UID %d)\n", process_name, uid);
         return entry;
     }
     
@@ -627,7 +640,7 @@ struct spoof_data* get_spoof_data(const char *process_name, uid_t uid) {
     cache_head = entry;
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
     
-    pr_info("[Obbed] Generated new random spoof data for process %s (UID %d)\n", process_name, uid);
+    LOGD("Generated new random spoof data for process %s (UID %d)\n", process_name, uid);
     return entry;
 }
 
@@ -650,7 +663,7 @@ void spoof_cache_cleanup(void) {
     cache_head = NULL;
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
     
-    pr_info("[Obbed] Spoof cache cleaned up\n");
+    LOGD("Spoof cache cleaned up\n");
 }
 
 void print_spoof_cache(void) {
@@ -658,9 +671,9 @@ void print_spoof_cache(void) {
     unsigned long flags;
     if (!_raw_spin_lock_irqsave_fn || !_raw_spin_unlock_irqrestore_fn) return;
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
-    pr_info("[Obbed] Spoof cache contents:\n");
+    LOGD("Spoof cache contents:\n");
     for (entry = cache_head; entry != NULL; entry = entry->next) {
-        pr_info("  Process '%s' (UID %d): inode=%lu\n", entry->process_name, entry->uid, entry->inode_offset);
+        LOGD("  Process '%s' (UID %d): inode=%lu\n", entry->process_name, entry->uid, entry->inode_offset);
     }
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
 }

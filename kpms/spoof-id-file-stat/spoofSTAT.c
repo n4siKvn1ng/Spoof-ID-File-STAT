@@ -25,10 +25,21 @@
 #include "my_pid_utils.c"
 
 KPM_NAME("Spoof ID File STAT");
-KPM_VERSION("2.0.0");
+KPM_VERSION("2.4.0");
 KPM_LICENSE("GPL v2");
 KPM_AUTHOR("obbedcode, n4siKvn1ng");
 KPM_DESCRIPTION("Spoof ID when app is get ID from File STAT. ID that receive by the App have spoof after the STAT get value.");
+
+// Ubah menjadi 0 untuk Rilis (Log mati), 1 untuk Debug (Log nyala)
+#define DEBUG_MODE 0
+
+#if DEBUG_MODE
+    #define LOGD(fmt, ...) pr_info("[Obbed] " fmt, ##__VA_ARGS__)
+    #define LOGE(fmt, ...) pr_err("[Obbed] " fmt, ##__VA_ARGS__)
+#else
+    #define LOGD(fmt, ...) do {} while(0)
+    #define LOGE(fmt, ...) do {} while(0)
+#endif
 
 const char *margs = 0;
 static int paranoid_mode = 0;
@@ -87,7 +98,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
     // Look for process containing "fpjs" (from d.fpjs_pro_demo)
     if (target_uid == 0 && strstr(comm, "d.fpjs_pro_demo")) {
         target_uid = curr_uid;
-        pr_crit("[Obbed] TARGET DETECTED! UID=%d COMM='%s' - Will only spoof this UID from now on\n", target_uid, comm);
+        LOGD("TARGET DETECTED! UID=%d COMM='%s' - Will only spoof this UID from now on\n", target_uid, comm);
     }
 
     // Only proceed if this is our target UID
@@ -110,7 +121,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
         if (!is_ashmem) {
             spoof = get_spoof_data(target_process_name, curr_uid);
             if (!spoof) {
-                pr_err("[Obbed] [fstatat] Failed to get spoof data for UID %d\n", curr_uid);
+                LOGE("[fstatat] Failed to get spoof data for UID %d\n", curr_uid);
                 return;
             }
             seconds_offset = spoof->days_offset * 86400 + spoof->seconds_offset;
@@ -122,7 +133,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
         unsigned long cp_res = __arch_copy_from_user_fn(&local_stat, statbuf, sizeof(struct stat));
         
         if (cp_res != 0){
-            pr_err("[Obbed] [fstatat] Failed to use [__arch_copy_from_user] Return=%d using Fallback (compat_strncpy_from_user)\n", cp_res);
+            LOGE("[fstatat] Failed to use [__arch_copy_from_user] Return=%d using Fallback (compat_strncpy_from_user)\n", cp_res);
             
             struct timespec atim = {0}, mtim = {0}, ctim = {0};
             unsigned long inode = 0, dev_id = 0;
@@ -143,7 +154,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
 
             // pr_info("[Obbed] [fstatat] compat_strncpy_from_user >> Inode Result=%d Dev Result=%d Access Result=%d Modify Result=%d Change Result=%d\n", c_inode, c_dev, c_access, c_modify, c_change);
             if(!(c_inode > 0 && c_dev > 0  && c_access > 0 && c_modify > 0 && c_change > 0)) {
-                pr_err("[Obbed] [fstatat] (timespec) Failed, File=%s\n", path_buf);
+                LOGE("[fstatat] (timespec) Failed, File=%s\n", path_buf);
                 return;
             }
 
@@ -265,7 +276,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
 
             cp_res = compat_copy_to_user((char *)statbuf, &local_stat, sizeof(struct stat));
             if (cp_res <= 0) {
-                pr_err("[Obbed] Failed to copy data to user space. Error code: %ld\n", cp_res);
+                LOGE("Failed to copy data to user space. Error code: %ld\n", cp_res);
             } else {
                 // pr_info("[Obbed] [fstatat] Finished Replacing stat(%s) with Return value=(%d) with new times for UID(%d)\n", path_buf, cp_res, curr_uid);
             }
@@ -278,24 +289,24 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
 static long inline_hook_demo_init(const char *args, const char *event, void *__user reserved)
 {
     margs = args;
-    pr_info("[Obbed] Initializing ARM64 inline hook module...\n");
+    LOGD("Initializing ARM64 inline hook module...\n");
 
     kmalloc_fn = (typeof(kmalloc_fn))kallsyms_lookup_name("kmalloc");
     if (!kmalloc_fn) {
-        pr_info("[Obbed] Failed to resolve kmalloc\n");
+        LOGD("Failed to resolve kmalloc\n");
     }
 
     vmalloc_user_fn = (typeof(vmalloc_user_fn))kallsyms_lookup_name("vmalloc_user");
     if (!vmalloc_user_fn) {
-        pr_info("[Obbed] Failed to resolve vmalloc_user\n");
+        LOGD("Failed to resolve vmalloc_user\n");
     }
 
     __arch_copy_from_user_fn = (typeof(__arch_copy_from_user_fn))kallsyms_lookup_name("__arch_copy_from_user");
     if (!__arch_copy_from_user_fn) {
-        pr_info("[Obbed] Failed to resolve __arch_copy_from_user\n");
+        LOGD("Failed to resolve __arch_copy_from_user\n");
     }
 
-    pr_info("[Obbed] Finished resolving Kernel Functions\n");
+    LOGD("Finished resolving Kernel Functions\n");
 
     init_kernel_functions();
     my_init_kernel_task_pid_nr_ns();
@@ -313,31 +324,31 @@ static long inline_hook_demo_init(const char *args, const char *event, void *__u
     }
     
     if (!original_fstatat) {
-        pr_info("[Obbed] Failed to find fstatat syscall handler\n");
+        LOGD("Failed to find fstatat syscall handler\n");
         return -1;
     }
     
-    pr_info("[Obbed] Found fstatat syscall handler at %p\n", original_fstatat);
+    LOGD("Found fstatat syscall handler at %p\n", original_fstatat);
     
     // Install inline hook - using hook_wrap4 with NULL for the before function
     hook_err_t err = hook_wrap4((void *)original_fstatat, NULL, after_fstatat, 0);
     
     if (err != HOOK_NO_ERR) {
-        pr_info("[Obbed] Failed to install inline hook for fstatat: %d\n", err);
+        LOGD("Failed to install inline hook for fstatat: %d\n", err);
         return -1;
     }
     
-    pr_info("[Obbed] Successfully installed inline hook for fstatat\n");
+    LOGD("Successfully installed inline hook for fstatat\n");
 
     return 0;
 }
 
 static long inline_hook_control0(const char *args, char *__user out_msg, int outlen)
 {
-    pr_info("[Obbed] Control called with args: %s\n", args);
+    LOGD("Control called with args: %s\n", args);
     
     if (strstr(args, "stat") != NULL) {
-        pr_info("[Obbed] Received 'stat' command - cleaning up all spoof data...\n");
+        LOGD("Received 'stat' command - cleaning up all spoof data...\n");
         
         // Reset target UID so we detect fresh on next app launch
         target_uid = 0;
@@ -345,13 +356,13 @@ static long inline_hook_control0(const char *args, char *__user out_msg, int out
         // Clean up cache and files
         spoof_cache_cleanup();
         
-        pr_info("[Obbed] ========================================\n");
-        pr_info("[Obbed] Spoof data cleanup SUCCESS!\n");
-        pr_info("[Obbed] - Memory cache cleared\n");
-        pr_info("[Obbed] - Persistent files invalidated\n");
-        pr_info("[Obbed] - Target UID reset\n");
-        pr_info("[Obbed] New fingerprint will be generated on next app launch\n");
-        pr_info("[Obbed] ========================================\n");
+        LOGD("========================================\n");
+        LOGD("Spoof data cleanup SUCCESS!\n");
+        LOGD("- Memory cache cleared\n");
+        LOGD("- Persistent files invalidated\n");
+        LOGD("- Target UID reset\n");
+        LOGD("New fingerprint will be generated on next app launch\n");
+        LOGD("========================================\n");
     }
 
     return 0;
@@ -359,11 +370,11 @@ static long inline_hook_control0(const char *args, char *__user out_msg, int out
 
 static long inline_hook_demo_exit(void *__user reserved)
 {
-    pr_info("kpm-inline-hook-demo exit ...\n");
+    LOGD("kpm-inline-hook-demo exit ...\n");
 
     if (original_fstatat) {
         unhook((void *)original_fstatat);
-        pr_info("[Obbed] Removed inline hook for fstatat\n");
+        LOGD("Removed inline hook for fstatat\n");
     }
     
     return 0;
