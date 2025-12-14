@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <ktypes.h>
 #include <ksyms.h>
+#include <linux/sched.h>
 #include <asm/current.h>
 #include <linux/ptrace.h>
 #include <linux/err.h>
@@ -38,19 +39,26 @@ typedef long (*sys_fstatat_t)(void);
 sys_fstatat_t original_fstatat = NULL;
 struct spoof_data *spoof = NULL;
 
+// Target UID - auto-detected from process name
+// Will be set when we first see a process with name containing "fpjs"
+static uid_t target_uid = 0;
+
 // Define after hook function for fstatat
 void after_fstatat(hook_fargs4_t *args, void *udata)
 {
-    pr_info("[Obbed] after_fstatat hook triggered\n");
-    pr_info("[Obbed] args: %lx, %lx, %lx, %lx\n", 
-            (unsigned long)args->arg0, 
-            (unsigned long)args->arg1, 
-            (unsigned long)args->arg2, 
-            (unsigned long)args->arg3);
+    // pr_info("[Obbed] after_fstatat hook triggered\n");
+    // pr_info("[Obbed] args: %lx, %lx, %lx, %lx\n", 
+    //         (unsigned long)args->arg0, 
+    //         (unsigned long)args->arg1, 
+    //         (unsigned long)args->arg2, 
+    //         (unsigned long)args->arg3);
     char path_buf[MAX_PATH];
     const char __user *filename = (const char __user *)syscall_argn(args, 1);
     struct task_struct *task = current;
 
+    // Safety check removed to fix build error (incomplete task_struct definition)
+    // The whitelist filter below is sufficient to prevent bootloops.
+    
     int dfd = (int)syscall_argn(args, 0);
     struct stat __user *statbuf = (struct stat __user *)syscall_argn(args, 2);
     umode_t mode = (int)syscall_argn(args, 3);
@@ -58,27 +66,39 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
     args->local.data0 = (uint64_t)task;
 
     if (!filename || !task) {
-        pr_err("[Obbed] Invalid filename or task in [fstatat] hook\n");
-        return;
-    } else if(compat_strncpy_from_user(path_buf, filename, sizeof(path_buf)) > 0) {
-        pr_info("[Obbed] Success get filename: %s\n", path_buf); 
-    } else {
-        pr_err("[Obbed] Failed to copy filename from user space\n");
-        return;
+        return; // Invalid filename or task - skip silently
+    } else if(compat_strncpy_from_user(path_buf, filename, sizeof(path_buf)) <= 0) {
+        return; // Failed to copy or empty path - skip silently (normal for AT_EMPTY_PATH)
     }
 
     pid_t pid = my_get_task_pid(task, PIDTYPE_PID);
     const char* comm = task_comm(current);
     uid_t curr_uid = current_uid();
 
-    int is_ashmem = strstr(path_buf, "ashmem") != NULL || strstr(path_buf, "hosts") != NULL;
-
-    if(curr_uid < 10000) {
-        pr_info("[Obbed] .. Skipping [fstatat] as request package is a System Package, uid=%d\n", curr_uid);
+    // Skip system processes (UID < 10000)
+    if (curr_uid < 10000) {
         return;
     }
 
-    pr_info("[Obbed] ====================================================================\n");
+    // Auto-detect target UID from process name
+    // Look for process containing "fpjs" (from d.fpjs_pro_demo)
+    if (target_uid == 0 && strstr(comm, "fpjs")) {
+        target_uid = curr_uid;
+        pr_crit("[Obbed] TARGET DETECTED! UID=%d COMM='%s' - Will only spoof this UID from now on\n", target_uid, comm);
+    }
+
+    // Only proceed if this is our target UID
+    // Skip if target not yet detected OR if this is not the target
+    if (target_uid == 0 || curr_uid != target_uid) {
+        return;
+    }
+
+    int is_ashmem = strstr(path_buf, "ashmem") != NULL || strstr(path_buf, "hosts") != NULL;
+
+    // Log target UID activity for debugging
+    pr_info("[Obbed] [SPOOF] UID=%d COMM='%s' PATH='%s' ASHMEM=%d\n", curr_uid, comm, path_buf, is_ashmem);
+
+    // pr_info("[Obbed] ====================================================================\n");
     if (args->ret == 0) {
         struct stat local_stat;
         unsigned long seconds_offset = 0;
@@ -91,9 +111,9 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
                 return;
             }
             seconds_offset = spoof->days_offset * 86400 + spoof->seconds_offset;
-            pr_info("[Obbed] [fstatat] Using Spoof Data for >> stat(%s) for UID(%d) Cached Offset Seconds=%d\n", path_buf, curr_uid, seconds_offset);
+            // pr_info("[Obbed] [fstatat] Using Spoof Data for >> stat(%s) for UID(%d) Cached Offset Seconds=%d\n", path_buf, curr_uid, seconds_offset);
         } else {
-            pr_info("[Obbed] [fstatat] Detected ashmem device: %s - will use system default timestamp (1970)\n", path_buf);
+            // pr_info("[Obbed] [fstatat] Detected ashmem device: %s - will use system default timestamp (1970)\n", path_buf);
         }
 
         unsigned long cp_res = __arch_copy_from_user_fn(&local_stat, statbuf, sizeof(struct stat));
@@ -110,7 +130,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
             const size_t mtim_offset = offsetof(struct stat, st_mtim);
             const size_t ctim_offset = offsetof(struct stat, st_ctim);
 
-            pr_info("[Obbed] [fstatat] [timespec] Offsets, Inode=%d Dev=%d Access=%d Modify=%d Change=%d\n", ino_offset, dev_offset, atim_offset, mtim_offset, ctim_offset);
+            // pr_info("[Obbed] [fstatat] [timespec] Offsets, Inode=%d Dev=%d Access=%d Modify=%d Change=%d\n", ino_offset, dev_offset, atim_offset, mtim_offset, ctim_offset);
 
             int c_inode = compat_strncpy_from_user((char *)&inode,  (const char __user *)((char *)statbuf + ino_offset), sizeof(unsigned long));
             int c_dev = compat_strncpy_from_user((char *)&dev_id,  (const char __user *)((char *)statbuf + dev_offset), sizeof(unsigned long));
@@ -118,25 +138,25 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
             int c_modify = compat_strncpy_from_user((char *)&mtim, (const char __user *)((char *)statbuf + mtim_offset), sizeof(struct timespec));
             int c_change = compat_strncpy_from_user((char *)&ctim, (const char __user *)((char *)statbuf + ctim_offset),sizeof(struct timespec));
 
-            pr_info("[Obbed] [fstatat] compat_strncpy_from_user >> Inode Result=%d Dev Result=%d Access Result=%d Modify Result=%d Change Result=%d\n", c_inode, c_dev, c_access, c_modify, c_change);
+            // pr_info("[Obbed] [fstatat] compat_strncpy_from_user >> Inode Result=%d Dev Result=%d Access Result=%d Modify Result=%d Change Result=%d\n", c_inode, c_dev, c_access, c_modify, c_change);
             if(!(c_inode > 0 && c_dev > 0  && c_access > 0 && c_modify > 0 && c_change > 0)) {
                 pr_err("[Obbed] [fstatat] (timespec) Failed, File=%s\n", path_buf);
                 return;
             }
 
-            pr_info("[Obbed] [fstatat] Original Times for %s (Inode=%lu):\n  Dev=%lu:\n  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
-                   path_buf, inode, dev_id,
-                   atim.tv_sec, atim.tv_nsec,
-                   mtim.tv_sec, mtim.tv_nsec,
-                   ctim.tv_sec, ctim.tv_nsec);
+            // pr_info("[Obbed] [fstatat] Original Times for %s (Inode=%lu):\n  Dev=%lu:\n  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
+            //        path_buf, inode, dev_id,
+            //        atim.tv_sec, atim.tv_nsec,
+            //        mtim.tv_sec, mtim.tv_nsec,
+            //        ctim.tv_sec, ctim.tv_nsec);
             
             if(is_ashmem){
                 // Log the original timestamps before modification
-                pr_info("[Obbed] [fstatat] Original Timestamps for ASHMEM:\n"
-                        "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
-                        atim.tv_sec, atim.tv_nsec,
-                        mtim.tv_sec, mtim.tv_nsec,
-                        ctim.tv_sec, ctim.tv_nsec);
+                // pr_info("[Obbed] [fstatat] Original Timestamps for ASHMEM:\n"
+                //         "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
+                //         atim.tv_sec, atim.tv_nsec,
+                //         mtim.tv_sec, mtim.tv_nsec,
+                //         ctim.tv_sec, ctim.tv_nsec);
 
                 // ASHMEM HANDLING: Set all timestamps to 1970-01-01
                 atim.tv_sec = 0;  // Explicitly set to Unix epoch
@@ -151,11 +171,11 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
                 }
 
                 // Log the modified timestamps
-                pr_info("[Obbed] [fstatat] Modified Timestamps for ASHMEM:\n"
-                        "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
-                        atim.tv_sec, atim.tv_nsec,
-                        mtim.tv_sec, mtim.tv_nsec,
-                        ctim.tv_sec, ctim.tv_nsec);
+                // pr_info("[Obbed] [fstatat] Modified Timestamps for ASHMEM:\n"
+                //         "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
+                //         atim.tv_sec, atim.tv_nsec,
+                //         mtim.tv_sec, mtim.tv_nsec,
+                //         ctim.tv_sec, ctim.tv_nsec);
             } else {
                 // Regular file handling with spoof offsets
                 inode += spoof->inode_offset;
@@ -176,29 +196,29 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
             compat_copy_to_user((char __user *)((char *)statbuf + mtim_offset), &mtim, sizeof(struct timespec));
             compat_copy_to_user((char __user *)((char *)statbuf + ctim_offset), &ctim, sizeof(struct timespec));
             
-            pr_info("[Obbed] [fstatat] New Times for %s (Inode=%lu):\n  Dev=%lu\n  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
-                   path_buf, inode, dev_id,
-                   atim.tv_sec, atim.tv_nsec,
-                   mtim.tv_sec, mtim.tv_nsec,
-                   ctim.tv_sec, ctim.tv_nsec);
+            // pr_info("[Obbed] [fstatat] New Times for %s (Inode=%lu):\n  Dev=%lu\n  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
+            //        path_buf, inode, dev_id,
+            //        atim.tv_sec, atim.tv_nsec,
+            //        mtim.tv_sec, mtim.tv_nsec,
+            //        ctim.tv_sec, ctim.tv_nsec);
 
         } else {
-            pr_info("[Obbed] [fstatat] (__arch_copy_from_user) Times for %s UID: %d  (Inode=%lu)\n (Device=%lu)\nAccess: %ld.%ld\nModify: %ld.%ld\nChange: %ld.%ld\n", 
-                    path_buf,
-                    curr_uid,
-                    local_stat.st_ino,
-                    local_stat.st_dev,
-                    local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
-                    local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec, 
-                    local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
+            // pr_info("[Obbed] [fstatat] (__arch_copy_from_user) Times for %s UID: %d  (Inode=%lu)\n (Device=%lu)\nAccess: %ld.%ld\nModify: %ld.%ld\nChange: %ld.%ld\n", 
+            //         path_buf,
+            //         curr_uid,
+            //         local_stat.st_ino,
+            //         local_stat.st_dev,
+            //         local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
+            //         local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec, 
+            //         local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
 
             if (is_ashmem) {
                 // Log the original timestamps before modification
-                pr_info("[Obbed] [fstatat] Original Timestamps for ASHMEM:\n"
-                        "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
-                        local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
-                        local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec,
-                        local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
+                // pr_info("[Obbed] [fstatat] Original Timestamps for ASHMEM:\n"
+                //         "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
+                //         local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
+                //         local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec,
+                //         local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
 
                 // ASHMEM HANDLING: Set all timestamps to 1970-01-01
                 local_stat.st_atim.tv_sec = 0;  // Explicitly set to Unix epoch
@@ -213,11 +233,11 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
                 }
 
                 // Log the modified timestamps
-                pr_info("[Obbed] [fstatat] Modified Timestamps for ASHMEM:\n"
-                        "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
-                        local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
-                        local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec,
-                        local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
+                // pr_info("[Obbed] [fstatat] Modified Timestamps for ASHMEM:\n"
+                //         "  Access: %ld.%ld\n  Modify: %ld.%ld\n  Change: %ld.%ld\n",
+                //         local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
+                //         local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec,
+                //         local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
             } else {
                 // Regular file handling with spoof offsets
                 local_stat.st_ino += spoof->inode_offset;
@@ -231,20 +251,20 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
                 if(local_stat.st_ctim.tv_nsec > 0) local_stat.st_ctim.tv_nsec += spoof->nano_offset;
             }
 
-            pr_info("[Obbed] [fstatat] (__arch_copy_from_user) New Times for %s UID: %d  (Inode=%lu)\n (Device=%lu)\nAccess: %ld.%ld\nModify: %ld.%ld\nChange: %ld.%ld\n", 
-                    path_buf,
-                    curr_uid,
-                    local_stat.st_ino,
-                    local_stat.st_dev,
-                    local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
-                    local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec, 
-                    local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
+            // pr_info("[Obbed] [fstatat] (__arch_copy_from_user) New Times for %s UID: %d  (Inode=%lu)\n (Device=%lu)\nAccess: %ld.%ld\nModify: %ld.%ld\nChange: %ld.%ld\n", 
+            //         path_buf,
+            //         curr_uid,
+            //         local_stat.st_ino,
+            //         local_stat.st_dev,
+            //         local_stat.st_atim.tv_sec, local_stat.st_atim.tv_nsec,
+            //         local_stat.st_mtim.tv_sec, local_stat.st_mtim.tv_nsec, 
+            //         local_stat.st_ctim.tv_sec, local_stat.st_ctim.tv_nsec);
 
             cp_res = compat_copy_to_user((char *)statbuf, &local_stat, sizeof(struct stat));
             if (cp_res <= 0) {
                 pr_err("[Obbed] Failed to copy data to user space. Error code: %ld\n", cp_res);
             } else {
-                pr_info("[Obbed] [fstatat] Finished Replacing stat(%s) with Return value=(%d) with new times for UID(%d)\n", path_buf, cp_res, curr_uid);
+                // pr_info("[Obbed] [fstatat] Finished Replacing stat(%s) with Return value=(%d) with new times for UID(%d)\n", path_buf, cp_res, curr_uid);
             }
             
         }

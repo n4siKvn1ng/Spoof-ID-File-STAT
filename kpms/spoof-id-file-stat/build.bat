@@ -34,6 +34,12 @@ if exist "syscallhook.kpm" (
 REM Set compiler and build
 set TARGET_COMPILE=aarch64-none-elf-
 echo Building with: %TARGET_COMPILE%gcc
+
+REM Clean old object files to force full recompilation
+echo Cleaning old object files...
+del /Q *.o 2>nul
+del /Q *.kpm 2>nul
+
 make
 if %ERRORLEVEL% NEQ 0 (
     echo Build failed!

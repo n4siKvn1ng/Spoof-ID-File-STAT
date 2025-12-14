@@ -13,8 +13,7 @@ Linux 3.18 - 6.6 (theoretically)
 Same as APatch
 
 ## BUG
-- Do not embed this module into APatch, as it may cause the phone’s functionality to malfunction. If this happens, the solution is to reinstall APatch without embedding the module.
-- If you want to install an application, please unload this module first. Otherwise, the installation process will never complete.
+- report if you find any bug
 
 ## How To Use?
 Make sure APatch is installed. Open the APatch app, go to the KPModule tab, then select the 'Load' option and choose the spoofSTAT.kpm file. If you haven't downloaded the spoofSTAT.kpm file yet, you can get it from [here](https://github.com/n4siKvn1ng/Spoof-ID-File-STAT/releases)

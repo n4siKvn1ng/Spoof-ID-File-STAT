@@ -100,7 +100,7 @@ void remove_spoof_data(uid_t uid) {
 }
 
 struct spoof_data* get_spoof_data(uid_t uid) {
-    struct spoof_data *entry;
+    struct spoof_data *entry, *prev;
     unsigned long flags;
 
     if (!_raw_spin_lock_irqsave_fn || !_raw_spin_unlock_irqrestore_fn || !__kmalloc_fn) {
@@ -108,17 +108,28 @@ struct spoof_data* get_spoof_data(uid_t uid) {
         return NULL;
     }
 
-    // Search existing entries
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     
-    for (entry = cache_head; entry != NULL; entry = entry->next) {
-        if (entry->uid == uid) {
-            _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
-            return entry;
+    // ALWAYS remove existing entry for this UID to force fresh random values
+    if (cache_head && cache_head->uid == uid) {
+        entry = cache_head;
+        cache_head = cache_head->next;
+        if (kfree_fn) kfree_fn(entry);
+    } else {
+        prev = cache_head;
+        entry = cache_head ? cache_head->next : NULL;
+        while (entry != NULL) {
+            if (entry->uid == uid) {
+                prev->next = entry->next;
+                if (kfree_fn) kfree_fn(entry);
+                break;
+            }
+            prev = entry;
+            entry = entry->next;
         }
     }
 
-    // Create new entry if not found
+    // Create new entry with fresh random values
     entry = __kmalloc_fn(sizeof(struct spoof_data), __GFP_ATOMIC | __GFP_ZERO);
     if (entry) {
         entry->uid = uid;
