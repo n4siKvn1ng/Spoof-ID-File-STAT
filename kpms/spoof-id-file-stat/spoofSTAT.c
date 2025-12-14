@@ -82,7 +82,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
 
     // Auto-detect target UID from process name
     // Look for process containing "fpjs" (from d.fpjs_pro_demo)
-    if (target_uid == 0 && strstr(comm, "fpjs")) {
+    if (target_uid == 0 && strstr(comm, "d.fpjs_pro_demo")) {
         target_uid = curr_uid;
         pr_crit("[Obbed] TARGET DETECTED! UID=%d COMM='%s' - Will only spoof this UID from now on\n", target_uid, comm);
     }
