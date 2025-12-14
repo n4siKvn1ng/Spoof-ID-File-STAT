@@ -39,8 +39,11 @@ typedef long (*sys_fstatat_t)(void);
 sys_fstatat_t original_fstatat = NULL;
 struct spoof_data *spoof = NULL;
 
-// Target UID - auto-detected from process name
-// Will be set when we first see a process with name containing "fpjs"
+// Target process name - hardcoded for now
+static const char *target_process_name = TARGET_PROCESS_NAME;
+
+// Target UID - auto-detected from process name, kept for quick filtering
+// But the actual identifier for persistence is the process name
 static uid_t target_uid = 0;
 
 // Define after hook function for fstatat
@@ -105,7 +108,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
 
         // Only get spoof data if not an ashmem device
         if (!is_ashmem) {
-            spoof = get_spoof_data(curr_uid);
+            spoof = get_spoof_data(target_process_name, curr_uid);
             if (!spoof) {
                 pr_err("[Obbed] [fstatat] Failed to get spoof data for UID %d\n", curr_uid);
                 return;

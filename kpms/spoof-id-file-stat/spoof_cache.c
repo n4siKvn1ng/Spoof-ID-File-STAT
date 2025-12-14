@@ -91,7 +91,8 @@ struct spoof_work_ctx {
     struct my_work_struct work; 
     
     int op_type;
-    uid_t uid;
+    char process_name[MAX_PROCESS_NAME];  // Process name as identifier
+    uid_t uid;                            // UID for reference
     struct spoof_data *data;     // For SAVE (input) or LOAD (output)
     int result;                  // Return value
 };
@@ -215,21 +216,16 @@ static void spoof_file_op_end(const struct cred *old_cred) {
     revert_creds_fn(old_cred);
 }
 
-static void build_spoof_filepath(uid_t uid, char *buf, size_t buflen) {
+static void build_spoof_filepath(const char *process_name, char *buf, size_t buflen) {
     int i = 0;
-    char uidstr[16];
-    int uidlen = 0;
-    uid_t tmp = uid;
-    
-    do {
-        uidstr[uidlen++] = '0' + (tmp % 10);
-        tmp /= 10;
-    } while (tmp > 0 && uidlen < 15);
+    const char *p;
     
     const char *prefix = SPOOF_FILE_PREFIX;
     while (*prefix && i < buflen - 1) buf[i++] = *prefix++;
     
-    while (uidlen > 0 && i < buflen - 1) buf[i++] = uidstr[--uidlen];
+    // Append process name
+    p = process_name;
+    while (*p && i < buflen - 1) buf[i++] = *p++;
     
     const char *suffix = SPOOF_FILE_SUFFIX;
     while (*suffix && i < buflen - 1) buf[i++] = *suffix++;
@@ -260,19 +256,25 @@ static int do_spoof_ensure_dir(void) {
     return ret;
 }
 
-static int do_spoof_file_save(uid_t uid, struct spoof_data *data) {
+static int do_spoof_file_save(const char *process_name, struct spoof_data *data) {
     struct file *f;
     struct spoof_file_data file_data;
     char filepath[128];
     loff_t pos = 0;
     ssize_t written;
     const struct cred *old_cred;
+    int i;
     
     if (!filp_open_fn || !filp_close_fn || !kernel_write_fn) return -1;
     
-    build_spoof_filepath(uid, filepath, sizeof(filepath));
+    build_spoof_filepath(process_name, filepath, sizeof(filepath));
     
     file_data.magic = SPOOF_MAGIC;
+    // Copy process name
+    for (i = 0; i < MAX_PROCESS_NAME - 1 && data->process_name[i]; i++) {
+        file_data.process_name[i] = data->process_name[i];
+    }
+    file_data.process_name[i] = '\0';
     file_data.uid = data->uid;
     file_data.dev_offset = data->dev_offset;
     file_data.inode_offset = data->inode_offset;
@@ -298,21 +300,22 @@ static int do_spoof_file_save(uid_t uid, struct spoof_data *data) {
         return -1;
     }
     
-    pr_info("[Obbed] [WORKER] Successfully saved %s\n", filepath);
+    pr_info("[Obbed] [WORKER] Successfully saved %s (process: %s)\n", filepath, process_name);
     return 0;
 }
 
-static int do_spoof_file_load(uid_t uid, struct spoof_data *data) {
+static int do_spoof_file_load(const char *process_name, struct spoof_data *data) {
     struct file *f;
     struct spoof_file_data file_data;
     char filepath[128];
     loff_t pos = 0;
     ssize_t read_bytes;
     const struct cred *old_cred;
+    int i;
     
     if (!filp_open_fn || !filp_close_fn || !kernel_read_fn) return -1;
     
-    build_spoof_filepath(uid, filepath, sizeof(filepath));
+    build_spoof_filepath(process_name, filepath, sizeof(filepath));
     
     old_cred = spoof_file_op_start();
     
@@ -328,8 +331,17 @@ static int do_spoof_file_load(uid_t uid, struct spoof_data *data) {
     
     if (read_bytes != sizeof(file_data)) return -1;
     if (file_data.magic != SPOOF_MAGIC) return -1;
-    if (file_data.uid != uid) return -1;
+    // Validate process name matches
+    for (i = 0; i < MAX_PROCESS_NAME; i++) {
+        if (file_data.process_name[i] != process_name[i]) return -1;
+        if (file_data.process_name[i] == '\0') break;
+    }
     
+    // Copy process name to data
+    for (i = 0; i < MAX_PROCESS_NAME - 1 && file_data.process_name[i]; i++) {
+        data->process_name[i] = file_data.process_name[i];
+    }
+    data->process_name[i] = '\0';
     data->uid = file_data.uid;
     data->dev_offset = file_data.dev_offset;
     data->inode_offset = file_data.inode_offset;
@@ -341,13 +353,13 @@ static int do_spoof_file_load(uid_t uid, struct spoof_data *data) {
     return 0;
 }
 
-static int do_spoof_file_delete(uid_t uid) {
+static int do_spoof_file_delete(const char *process_name) {
     struct file *f;
     char filepath[128];
     const struct cred *old_cred;
     
     if (!filp_open_fn) return -1;
-    build_spoof_filepath(uid, filepath, sizeof(filepath));
+    build_spoof_filepath(process_name, filepath, sizeof(filepath));
     
     old_cred = spoof_file_op_start();
     f = filp_open_fn(filepath, O_RDONLY, 0);
@@ -361,6 +373,7 @@ static int do_spoof_file_delete(uid_t uid) {
     if (!IS_ERR(f)) filp_close_fn(f, NULL);
     
     spoof_file_op_end(old_cred);
+    pr_info("[Obbed] [WORKER] Deleted file for process: %s\n", process_name);
     return 0;
 }
 
@@ -370,25 +383,26 @@ static void spoof_worker_handler(struct my_work_struct *work) {
     
     switch (ctx->op_type) {
         case OP_SAVE:
-            ctx->result = do_spoof_file_save(ctx->uid, ctx->data);
+            ctx->result = do_spoof_file_save(ctx->process_name, ctx->data);
             break;
         case OP_LOAD:
-            ctx->result = do_spoof_file_load(ctx->uid, ctx->data);
+            ctx->result = do_spoof_file_load(ctx->process_name, ctx->data);
             break;
         case OP_CHECK_DIR:
             ctx->result = do_spoof_ensure_dir();
             break;
         case OP_DELETE:
-            ctx->result = do_spoof_file_delete(ctx->uid);
+            ctx->result = do_spoof_file_delete(ctx->process_name);
             break;
         default: break;
     }
 }
 
 // DISPATCHER
-static int dispatch_spoof_work(int op_type, uid_t uid, struct spoof_data *data) {
+static int dispatch_spoof_work(int op_type, const char *process_name, struct spoof_data *data) {
     struct spoof_work_ctx *ctx;
     int ret;
+    int i;
 
     // Check if we have the components to execute safely via workqueue
     if (queue_work_on_fn && flush_work_fn && resolved_system_wq) {
@@ -400,7 +414,15 @@ static int dispatch_spoof_work(int op_type, uid_t uid, struct spoof_data *data) 
         MY_INIT_WORK(&ctx->work, spoof_worker_handler);
         
         ctx->op_type = op_type;
-        ctx->uid = uid;
+        // Copy process name
+        if (process_name) {
+            for (i = 0; i < MAX_PROCESS_NAME - 1 && process_name[i]; i++) {
+                ctx->process_name[i] = process_name[i];
+            }
+            ctx->process_name[i] = '\0';
+        } else {
+            ctx->process_name[0] = '\0';
+        }
         ctx->data = data;
         
         // Manual schedule_work: queue_work_on(WORK_CPU_UNBOUND, system_wq, work)
@@ -423,13 +445,13 @@ static int dispatch_spoof_work(int op_type, uid_t uid, struct spoof_data *data) 
 
     switch (op_type) {
         case OP_SAVE:
-            return do_spoof_file_save(uid, data);
+            return do_spoof_file_save(process_name, data);
         case OP_LOAD:
-            return do_spoof_file_load(uid, data);
+            return do_spoof_file_load(process_name, data);
         case OP_CHECK_DIR:
             return do_spoof_ensure_dir();
         case OP_DELETE:
-            return do_spoof_file_delete(uid);
+            return do_spoof_file_delete(process_name);
         default: return -1;
     }
 }
@@ -437,45 +459,49 @@ static int dispatch_spoof_work(int op_type, uid_t uid, struct spoof_data *data) 
 // PUBLIC WRAPPERS
 
 int spoof_ensure_dir(void) {
-    return dispatch_spoof_work(OP_CHECK_DIR, 0, NULL);
+    return dispatch_spoof_work(OP_CHECK_DIR, NULL, NULL);
 }
 
-int spoof_file_save(uid_t uid, struct spoof_data *data) {
-    return dispatch_spoof_work(OP_SAVE, uid, data);
+int spoof_file_save(const char *process_name, struct spoof_data *data) {
+    return dispatch_spoof_work(OP_SAVE, process_name, data);
 }
 
-int spoof_file_load(uid_t uid, struct spoof_data *data) {
-    return dispatch_spoof_work(OP_LOAD, uid, data);
+int spoof_file_load(const char *process_name, struct spoof_data *data) {
+    return dispatch_spoof_work(OP_LOAD, process_name, data);
 }
 
-int spoof_file_delete(uid_t uid) {
-    return dispatch_spoof_work(OP_DELETE, uid, NULL);
+int spoof_file_delete(const char *process_name) {
+    return dispatch_spoof_work(OP_DELETE, process_name, NULL);
 }
 
-// Delete all spoof files (lock logic remains here, file deletion dispached)
+// Delete all spoof files (lock logic remains here, file deletion dispatched)
 int spoof_file_delete_all(void) {
     pr_info("[Obbed] Deleting all spoof data...\n");
     
     struct spoof_data *entry;
     unsigned long flags;
-    uid_t uids_to_delete[32]; // Max 32 apps supported for "Reset All" to keep stack small
+    char process_names_to_delete[8][MAX_PROCESS_NAME]; // Max 8 apps for "Reset All"
     int count = 0;
-    int i;
+    int i, j;
 
     if (!_raw_spin_lock_irqsave_fn || !_raw_spin_unlock_irqrestore_fn) return -1;
 
-    // 1. Snapshot valid UIDs
+    // 1. Snapshot valid process names
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     for (entry = cache_head; entry != NULL; entry = entry->next) {
-        if (count < 32) {
-            uids_to_delete[count++] = entry->uid;
+        if (count < 8) {
+            for (j = 0; j < MAX_PROCESS_NAME - 1 && entry->process_name[j]; j++) {
+                process_names_to_delete[count][j] = entry->process_name[j];
+            }
+            process_names_to_delete[count][j] = '\0';
+            count++;
         }
     }
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
 
     // 2. Delete files (Safe without lock)
     for (i = 0; i < count; i++) {
-        spoof_file_delete(uids_to_delete[i]);
+        spoof_file_delete(process_names_to_delete[i]);
     }
     
     pr_info("[Obbed] Spoof file cleanup completed (%d files)\n", count);
@@ -491,19 +517,29 @@ void spoof_cache_init(void) {
     spoof_ensure_dir();
 }
 
+// Helper to compare process names
+static int process_name_matches(const char *a, const char *b) {
+    int i;
+    for (i = 0; i < MAX_PROCESS_NAME; i++) {
+        if (a[i] != b[i]) return 0;
+        if (a[i] == '\0') break;
+    }
+    return 1;
+}
+
 // Safe removal
-void remove_spoof_data(uid_t uid) {
+void remove_spoof_data(const char *process_name) {
     struct spoof_data *entry, *prev;
     unsigned long flags;
 
     // Dispatch file delete (safe, no lock)
-    spoof_file_delete(uid);
+    spoof_file_delete(process_name);
 
     if (!_raw_spin_lock_irqsave_fn || !_raw_spin_unlock_irqrestore_fn || !kfree_fn) return;
 
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     
-    if (cache_head && cache_head->uid == uid) {
+    if (cache_head && process_name_matches(cache_head->process_name, process_name)) {
         entry = cache_head;
         cache_head = cache_head->next;
         kfree_fn(entry);
@@ -514,7 +550,7 @@ void remove_spoof_data(uid_t uid) {
     prev = cache_head;
     entry = cache_head ? cache_head->next : NULL;
     while (entry != NULL) {
-        if (entry->uid == uid) {
+        if (process_name_matches(entry->process_name, process_name)) {
             prev->next = entry->next;
             kfree_fn(entry);
             break;
@@ -525,16 +561,24 @@ void remove_spoof_data(uid_t uid) {
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
 }
 
-struct spoof_data* get_spoof_data(uid_t uid) {
+struct spoof_data* get_spoof_data(const char *process_name, uid_t uid) {
     struct spoof_data *entry;
     unsigned long flags;
+    int i;
 
+    if (!process_name) return NULL;
     if (!_raw_spin_lock_irqsave_fn || !_raw_spin_unlock_irqrestore_fn || !__kmalloc_fn) return NULL;
 
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     
     for (entry = cache_head; entry != NULL; entry = entry->next) {
-        if (entry->uid == uid) {
+        if (process_name_matches(entry->process_name, process_name)) {
+            // Update UID if it changed (reinstall case)
+            if (entry->uid != uid) {
+                pr_info("[Obbed] UID changed for process %s: %d -> %d (likely reinstall)\n", 
+                        process_name, entry->uid, uid);
+                entry->uid = uid;
+            }
             _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
             return entry;
         }
@@ -544,17 +588,30 @@ struct spoof_data* get_spoof_data(uid_t uid) {
     entry = __kmalloc_fn(sizeof(struct spoof_data), __GFP_ATOMIC | __GFP_ZERO);
     if (!entry) return NULL;
     
-    // LOAD (Safe Workqueue)
-    if (spoof_file_load(uid, entry) == 0) {
+    // LOAD (Safe Workqueue) - Try to load from file
+    if (spoof_file_load(process_name, entry) == 0) {
+        // Update UID if it changed (reinstall case)
+        if (entry->uid != uid) {
+            pr_info("[Obbed] UID changed for process %s (from file): %d -> %d (likely reinstall)\n", 
+                    process_name, entry->uid, uid);
+            entry->uid = uid;
+            // Re-save with new UID
+            spoof_file_save(process_name, entry);
+        }
         flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
         entry->next = cache_head;
         cache_head = entry;
         _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
-        pr_info("[Obbed] Loaded persistent spoof data for UID %d\n", uid);
+        pr_info("[Obbed] Loaded persistent spoof data for process %s (UID %d)\n", process_name, uid);
         return entry;
     }
     
-    // NEW
+    // NEW - Generate random values
+    // Copy process name
+    for (i = 0; i < MAX_PROCESS_NAME - 1 && process_name[i]; i++) {
+        entry->process_name[i] = process_name[i];
+    }
+    entry->process_name[i] = '\0';
     entry->uid = uid;
     entry->dev_offset = (get_random_u64() % 100);
     entry->inode_offset = (get_random_u64() % 100) + 1;
@@ -563,14 +620,14 @@ struct spoof_data* get_spoof_data(uid_t uid) {
     entry->nano_offset = (get_random_u64() % 9000);
     
     // SAVE (Safe Workqueue)
-    spoof_file_save(uid, entry);
+    spoof_file_save(process_name, entry);
     
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     entry->next = cache_head;
     cache_head = entry;
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
     
-    pr_info("[Obbed] Generated new random spoof data for UID %d\n", uid);
+    pr_info("[Obbed] Generated new random spoof data for process %s (UID %d)\n", process_name, uid);
     return entry;
 }
 
@@ -603,7 +660,7 @@ void print_spoof_cache(void) {
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     pr_info("[Obbed] Spoof cache contents:\n");
     for (entry = cache_head; entry != NULL; entry = entry->next) {
-        pr_info("  UID %d: inode=%lu\n", entry->uid, entry->inode_offset);
+        pr_info("  Process '%s' (UID %d): inode=%lu\n", entry->process_name, entry->uid, entry->inode_offset);
     }
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
 }
