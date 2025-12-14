@@ -96,7 +96,7 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
     int is_ashmem = strstr(path_buf, "ashmem") != NULL || strstr(path_buf, "hosts") != NULL;
 
     // Log target UID activity for debugging
-    pr_info("[Obbed] [SPOOF] UID=%d COMM='%s' PATH='%s' ASHMEM=%d\n", curr_uid, comm, path_buf, is_ashmem);
+    // pr_info("[Obbed] [SPOOF] UID=%d COMM='%s' PATH='%s' ASHMEM=%d\n", curr_uid, comm, path_buf, is_ashmem);
 
     // pr_info("[Obbed] ====================================================================\n");
     if (args->ret == 0) {
@@ -331,10 +331,24 @@ static long inline_hook_demo_init(const char *args, const char *event, void *__u
 
 static long inline_hook_control0(const char *args, char *__user out_msg, int outlen)
 {
-    pr_info("inline_hook control, args: %s\n", args);
-    if (strstr(args, "stat") != NULL){
+    pr_info("[Obbed] Control called with args: %s\n", args);
+    
+    if (strstr(args, "stat") != NULL) {
+        pr_info("[Obbed] Received 'stat' command - cleaning up all spoof data...\n");
+        
+        // Reset target UID so we detect fresh on next app launch
+        target_uid = 0;
+        
+        // Clean up cache and files
         spoof_cache_cleanup();
-        pr_info("Spoof data clean up success\n");
+        
+        pr_info("[Obbed] ========================================\n");
+        pr_info("[Obbed] Spoof data cleanup SUCCESS!\n");
+        pr_info("[Obbed] - Memory cache cleared\n");
+        pr_info("[Obbed] - Persistent files invalidated\n");
+        pr_info("[Obbed] - Target UID reset\n");
+        pr_info("[Obbed] New fingerprint will be generated on next app launch\n");
+        pr_info("[Obbed] ========================================\n");
     }
 
     return 0;
