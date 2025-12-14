@@ -17,6 +17,7 @@
 #include <linux/ptrace.h>
 #include <linux/err.h>
 #include <linux/vmalloc.h>
+#include "logger.h"
 #include <log.h>
 
 #include "runtime.c"
@@ -30,17 +31,6 @@ KPM_LICENSE("GPL v2");
 KPM_AUTHOR("obbedcode, n4siKvn1ng");
 KPM_DESCRIPTION("Spoof ID when app is get ID from File STAT. ID that receive by the App have spoof after the STAT get value.");
 
-// Ubah menjadi 0 untuk Rilis (Log mati), 1 untuk Debug (Log nyala)
-#define DEBUG_MODE 0
-
-#if DEBUG_MODE
-    #define LOGD(fmt, ...) pr_info("[Obbed] " fmt, ##__VA_ARGS__)
-    #define LOGE(fmt, ...) pr_err("[Obbed] " fmt, ##__VA_ARGS__)
-#else
-    #define LOGD(fmt, ...) do {} while(0)
-    #define LOGE(fmt, ...) do {} while(0)
-#endif
-
 const char *margs = 0;
 static int paranoid_mode = 0;
 
@@ -50,8 +40,8 @@ typedef long (*sys_fstatat_t)(void);
 sys_fstatat_t original_fstatat = NULL;
 struct spoof_data *spoof = NULL;
 
-// Target process name - hardcoded for now
-static const char *target_process_name = TARGET_PROCESS_NAME;
+// Target process name - Dynamic
+static char target_process_name[MAX_PROCESS_NAME] = {0};
 
 // Target UID - auto-detected from process name, kept for quick filtering
 // But the actual identifier for persistence is the process name
@@ -95,15 +85,21 @@ void after_fstatat(hook_fargs4_t *args, void *udata)
     }
 
     // Auto-detect target UID from process name
-    // Look for process containing "fpjs" (from d.fpjs_pro_demo)
-    if (target_uid == 0 && strstr(comm, "d.fpjs_pro_demo")) {
-        target_uid = curr_uid;
-        LOGD("TARGET DETECTED! UID=%d COMM='%s' - Will only spoof this UID from now on\n", target_uid, comm);
+    // If current UID is NOT the target, check if it SHOULD be the target
+    if (curr_uid != target_uid) {
+        if (strstr(comm, "d.fpjs_pro_demo")) {
+            target_uid = curr_uid;
+            strcpy(target_process_name, "d.fpjs_pro_demo");
+            LOGD("TARGET DETECTED! UID=%d COMM='%s' (FPJS Demo) - Switched target\n", target_uid, comm);
+        } else if (strstr(comm, "passenger") || strstr(comm, "btaxi")) {
+            target_uid = curr_uid;
+            strcpy(target_process_name, "btaxi.passenger"); // Use the suspected name for file storage
+            LOGD("TARGET DETECTED! UID=%d COMM='%s' (Grab) - Switched target\n", target_uid, comm);
+        }
     }
 
     // Only proceed if this is our target UID
-    // Skip if target not yet detected OR if this is not the target
-    if (target_uid == 0 || curr_uid != target_uid) {
+    if (curr_uid != target_uid) {
         return;
     }
 
@@ -352,6 +348,7 @@ static long inline_hook_control0(const char *args, char *__user out_msg, int out
         
         // Reset target UID so we detect fresh on next app launch
         target_uid = 0;
+        target_process_name[0] = '\0';
         
         // Clean up cache and files
         spoof_cache_cleanup();

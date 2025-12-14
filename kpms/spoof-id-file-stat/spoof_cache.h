@@ -11,7 +11,7 @@
 #define SPOOF_FILE_SUFFIX ".dat"
 #define SPOOF_MAGIC 0x5350304F  // "SP0O" in hex
 #define MAX_PROCESS_NAME 64     // Maximum length for process name
-#define TARGET_PROCESS_NAME "d.fpjs_pro_demo"  // Target process name
+// #define TARGET_PROCESS_NAME "d.fpjs_pro_demo"  // Moved to dynamic detection in spoofSTAT.c
 
 // Structure to hold spoofed values for a process name
 struct spoof_data {

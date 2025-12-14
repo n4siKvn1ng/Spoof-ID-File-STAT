@@ -6,20 +6,7 @@
 #include <kputils.h>
 #include <linux/cred.h>
 #include <linux/sched.h>
-// #include <linux/workqueue.h> // Missing, so we define manually below
-
-// Ubah menjadi 0 untuk Rilis (Log mati), 1 untuk Debug (Log nyala)
-#define DEBUG_MODE 0
-
-#if DEBUG_MODE
-    #define LOGD(fmt, ...) pr_info("[Obbed] " fmt, ##__VA_ARGS__)
-    #define LOGE(fmt, ...) pr_err("[Obbed] " fmt, ##__VA_ARGS__)
-    #define LOGW(fmt, ...) pr_warn("[Obbed] " fmt, ##__VA_ARGS__)
-#else
-    #define LOGD(fmt, ...) do {} while(0)
-    #define LOGE(fmt, ...) do {} while(0)
-    #define LOGW(fmt, ...) do {} while(0)
-#endif
+#include "logger.h"
 
 // =========================================================================
 // MANUAL DEFINITIONS FOR WORKQUEUE (Since header is missing)
