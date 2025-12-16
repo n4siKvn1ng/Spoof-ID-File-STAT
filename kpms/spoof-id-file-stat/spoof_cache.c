@@ -101,6 +101,14 @@ struct spoof_work_ctx {
 static struct spoof_data *cache_head = NULL;
 static spinlock_t cache_lock = __SPIN_LOCK_UNLOCKED();
 
+// Hardcoded list of known target process names
+// These files will ALWAYS be deleted on cleanup, even if cache is empty (post-reload case)
+static const char *known_targets[] = {
+    "d.fpjs_pro_demo",
+    "btaxi.passenger",
+    NULL  // Sentinel
+};
+
 #define __GFP_ZERO      0x8000u
 #define __GFP_ATOMIC    0x80u
 
@@ -483,10 +491,11 @@ int spoof_file_delete_all(void) {
     char process_names_to_delete[8][MAX_PROCESS_NAME]; // Max 8 apps for "Reset All"
     int count = 0;
     int i, j;
+    const char **target;
 
     if (!_raw_spin_lock_irqsave_fn || !_raw_spin_unlock_irqrestore_fn) return -1;
 
-    // 1. Snapshot valid process names
+    // 1. Snapshot valid process names from cache
     flags = _raw_spin_lock_irqsave_fn(&cache_lock.rlock);
     for (entry = cache_head; entry != NULL; entry = entry->next) {
         if (count < 8) {
@@ -499,12 +508,19 @@ int spoof_file_delete_all(void) {
     }
     _raw_spin_unlock_irqrestore_fn(&cache_lock.rlock, flags);
 
-    // 2. Delete files (Safe without lock)
+    // 2. Delete files from cache entries
     for (i = 0; i < count; i++) {
         spoof_file_delete(process_names_to_delete[i]);
     }
+
+    // 3. ALWAYS delete known target files (handle post-reload case)
+    // This ensures files are deleted even if cache is empty after module reload
+    for (target = known_targets; *target != NULL; target++) {
+        spoof_file_delete(*target);
+        LOGD("Force-deleted file for known target: %s\n", *target);
+    }
     
-    LOGD("Spoof file cleanup completed (%d files)\n", count);
+    LOGD("Spoof file cleanup completed (%d cached + %d known targets)\n", count, (int)(sizeof(known_targets)/sizeof(known_targets[0]) - 1));
     return 0;
 }
 
