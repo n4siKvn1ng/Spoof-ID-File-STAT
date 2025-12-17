@@ -20,14 +20,14 @@ REM Create backup directory if it doesn't exist
 if not exist "backup" mkdir backup
 
 REM Backup existing KPM if it exists
-if exist "syscallhook.kpm" (
-    echo Backing up existing syscallhook.kpm...
+if exist "spoofSTAT.kpm" (
+    echo Backing up existing spoofSTAT.kpm...
     for /f "tokens=2-4 delims=/ " %%a in ('date /t') do (
         for /f "tokens=1-2 delims=: " %%x in ('time /t') do (
-            copy "syscallhook.kpm" "backup\syscallhook_%%c-%%a-%%b_%%x%%y.kpm" >nul
+            copy "spoofSTAT.kpm" "backup\spoofSTAT_%%c-%%a-%%b_%%x%%y.kpm" >nul
         )
     )
-    del "syscallhook.kpm"
+    del "spoofSTAT.kpm"
     echo Backup created and old file removed
 )
 
@@ -48,13 +48,13 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM If build succeeded and ADB is OK, handle device operations
 if !ADB_OK! EQU 1 (
-    if exist "syscallhook.kpm" (
+    if exist "spoofSTAT.kpm" (
         echo Checking for existing KPM on device...
-        adb shell "if [ -f /sdcard/kk/KPM/syscallhook.kpm ]; then rm /sdcard/kk/KPM/syscallhook.kpm && echo Removed old KPM from device; fi"
+        adb shell "if [ -f /sdcard/spoofSTAT.kpm ]; then rm /sdcard/spoofSTAT.kpm && echo Removed old KPM from device; fi"
         
         echo Creating directory and pushing new KPM...
-        adb shell mkdir -p /sdcard/kk/KPM/
-        adb push syscallhook.kpm /sdcard/kk/KPM/
+        adb shell mkdir -p /sdcard/
+        adb push spoofSTAT.kpm /sdcard/
         
         if !ERRORLEVEL! EQU 0 (
             echo Successfully pushed new KPM to device
